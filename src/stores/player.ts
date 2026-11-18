@@ -72,8 +72,12 @@ export const usePlayerStore = defineStore('player', () => {
         })
         return
       } catch (e) {
-        console.warn('hls 播放失败，改走原生播放:', e)
         destroyHls()
+        // Chrome 桌面原生播不了 m3u8，再走原生只会无声卡死：直接报失败，让重试/报错逻辑接管
+        if (!audio.value!.canPlayType('application/vnd.apple.mpegurl')) {
+          throw e
+        }
+        console.warn('hls 播放失败，改走原生播放:', e)
       }
     }
     audio.value!.src = url
@@ -140,8 +144,9 @@ export const usePlayerStore = defineStore('player', () => {
       })
       
       audio.value.addEventListener('stalled', () => {
-        console.log('音频加载停滞，尝试重新加载...')
-        if (audio.value && currentStation.value) {
+        // 只在正在播放时重载；起播阶段卡住由 playStation 的超时接管，避免对播不了的 m3u8 无限 load 循环
+        if (audio.value && currentStation.value && isPlaying.value) {
+          console.log('音频加载停滞，尝试重新加载...')
           audio.value.load()
         }
       })
@@ -239,7 +244,13 @@ export const usePlayerStore = defineStore('player', () => {
       audio.value!.volume = isDucked.value ? volume.value * 0.3 : volume.value
       audio.value!.muted = isMuted.value
 
-      await audio.value!.play()
+      // play() 在播不了的流上可能一直不返回：15 秒没出声就当失败，不再无声卡死
+      await Promise.race([
+        audio.value!.play(),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('播放超时，请稍后重试')), 15000)
+        )
+      ])
       
       console.log(`成功播放电台: ${station.name}`)
       

@@ -482,13 +482,14 @@ class RadioAPI {
       const stations = await this.searchStations({
         order: 'lastchecktime',
         reverse: true,
-        limit: limit * 4,
+        limit: limit * 10,
         hidebroken: true
       })
       // “最新”栏被批量入库的古兰经/圣训朗诵台淹没（带 quran/hadith 标签、有点击量也有台标，投票过滤拦不住）：
       // 先整批排除这类标签，不够数再回落，搜索页搜古兰经不受影响
       const notSpam = stations.filter((s) => !/quran|hadith/i.test(s.tags || ''))
-      const pool = notSpam.length >= limit ? notSpam : stations
+      // 不再回落到含垃圾的原列表：宁可栏目少几条，也不把批量朗诵台放回首页
+      const pool = notSpam
       // “最新”常被批量入库的 0 投票/0 点击台淹没（实测 30 个里 23 个不通）：
       // 有投票或点击的先留，不够数再回落到原列表，不让栏目变空
       const withSignal = pool.filter((s) => s.votes > 0 || s.clickcount > 0 || s.clicktrend > 0)
