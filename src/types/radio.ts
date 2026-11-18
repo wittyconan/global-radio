@@ -49,6 +49,7 @@ export interface RadioSearchParams {
   offset?: number
   limit?: number
   hidebroken?: boolean
+  is_https?: boolean
 }
 
 export interface Country {

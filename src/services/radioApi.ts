@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
 import type { RadioStation, RadioSearchParams, ApiResponse, Country, Language, Tag } from '../types/radio'
+import officialStationsJson from '../data/officialStations.json'
 
 // API provider interface
 interface APIProvider {
@@ -12,6 +13,36 @@ interface APIProvider {
 
 type CacheOptions = {
   bypassCache?: boolean
+}
+
+// 官方精选台：2026-11-18 实测 35 个 https 直播流（内地 CNR/CRI、香港 RTHK、澳门 TDM、台湾中广/飞碟/ICRT 等）。
+// 只做补充，不替代 Radio Browser；上站前已用 Range 探测验过 200/206，http 台不在此表。
+const OFFICIAL_STATIONS = officialStationsJson as RadioStation[]
+const isHttpsStation = (s: RadioStation) => (s.url_resolved || s.url || '').startsWith('https://')
+const dedupeStations = (stations: RadioStation[]): RadioStation[] => {
+  const seen = new Set<string>()
+  return stations.filter((s) => {
+    const key = (s.url_resolved || s.url || '').toLowerCase() || s.stationuuid
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+const officialFirst = (stations: RadioStation[], limit: number): RadioStation[] =>
+  dedupeStations([...OFFICIAL_STATIONS.filter(isHttpsStation), ...stations]).slice(0, limit)
+const matchingOfficialStations = (params: Record<string, unknown>): RadioStation[] => {
+  const q = String(params.name || '').toLowerCase().trim()
+  const tag = String(params.tag || '').toLowerCase().trim()
+  const cc = String(params.countrycode || '').toUpperCase().trim()
+  const lang = String(params.language || '').toLowerCase().trim()
+  if (!q && !tag && !cc && !lang) return []
+  return OFFICIAL_STATIONS.filter(isHttpsStation).filter((s) => {
+    if (q && !s.name.toLowerCase().includes(q) && !s.country.toLowerCase().includes(q)) return false
+    if (tag && !s.tags.toLowerCase().includes(tag)) return false
+    if (cc && s.countrycode !== cc) return false
+    if (lang && !s.language.toLowerCase().includes(lang)) return false
+    return true
+  })
 }
 
 class RadioAPI {
@@ -232,6 +263,8 @@ class RadioAPI {
         return cached
       }
 
+      // 站是 https，http 流会被浏览器以混合内容拦掉：默认只向 API 要 https 台
+      if (searchParams.is_https === undefined) searchParams.is_https = true
       if (this.debugEnabled) console.log('搜索参数:', searchParams)
       
       const response = await this.currentAPI.get('/json/stations/search', {
@@ -251,7 +284,10 @@ class RadioAPI {
       })
       
       if (this.debugEnabled) console.log(`搜索结果数量: ${response.data.length}`)
-      const data = response.data || []
+      const data = dedupeStations([
+        ...matchingOfficialStations(searchParams),
+        ...((response.data || []) as RadioStation[])
+      ])
       this.setCache(this.cache.stationSearch, cacheKey, data)
       return data
     })
@@ -278,13 +314,13 @@ class RadioAPI {
             language: 'chinese',
             tag: 'music',
             order: 'random',
-            limit: limit,
+            limit: limit * 2,
             hidebroken: true
           })
           const additionalStationsPromise = this.searchStations({
             countrycode: 'CN',
             order: 'random',
-            limit: limit,
+            limit: limit * 2,
             hidebroken: true
           })
           
@@ -309,8 +345,8 @@ class RadioAPI {
           const shuffled = merged.sort(() => 0.5 - Math.random())
           const result = {
             success: true,
-            data: shuffled.slice(0, limit),
-            source: 'radio-browser'
+            data: officialFirst(shuffled, limit),
+            source: 'radio-browser+official'
           }
           if (!options.bypassCache) {
             this.setCache(this.cache.topStations, cacheKey, result)
@@ -442,14 +478,18 @@ class RadioAPI {
       const stations = await this.searchStations({
         order: 'lastchecktime',
         reverse: true,
-        limit: limit,
+        limit: limit * 4,
         hidebroken: true
       })
-      if (this.debugEnabled) console.log(`Got ${stations.length} latest stations`)
+      // “最新”常被批量入库的 0 投票/0 点击台淹没（实测 30 个里 23 个不通）：
+      // 有投票或点击的先留，不够数再回落到原列表，不让栏目变空
+      const withSignal = stations.filter((s) => s.votes > 0 || s.clickcount > 0 || s.clicktrend > 0)
+      const usable = (withSignal.length >= limit ? withSignal : stations).slice(0, limit)
+      if (this.debugEnabled) console.log(`Got ${usable.length} latest stations`)
       if (!options.bypassCache) {
-        this.setCache(this.cache.latestStations, cacheKey, stations)
+        this.setCache(this.cache.latestStations, cacheKey, usable)
       }
-      return stations
+      return usable
     }, () => {
       // 回退：API不可用时返回空数组
       if (this.debugEnabled) console.log('API不可用，无备用数据')
