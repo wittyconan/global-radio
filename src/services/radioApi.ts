@@ -20,11 +20,15 @@ type CacheOptions = {
 const OFFICIAL_STATIONS = officialStationsJson as RadioStation[]
 const isHttpsStation = (s: RadioStation) => (s.url_resolved || s.url || '').startsWith('https://')
 const dedupeStations = (stations: RadioStation[]): RadioStation[] => {
-  const seen = new Set<string>()
+  const seenUrl = new Set<string>()
+  const seenName = new Set<string>()
   return stations.filter((s) => {
-    const key = (s.url_resolved || s.url || '').toLowerCase() || s.stationuuid
-    if (seen.has(key)) return false
-    seen.add(key)
+    const urlKey = (s.url_resolved || s.url || '').toLowerCase() || s.stationuuid
+    // 同名重复（如 Radio Browser 里 CNR-1 x4、CNR-15 x6）只留第一条；官方台排在前面所以优先留官方的
+    const nameKey = s.name.toLowerCase().replace(/\s+/g, '')
+    if (seenUrl.has(urlKey) || (nameKey && seenName.has(nameKey))) return false
+    seenUrl.add(urlKey)
+    if (nameKey) seenName.add(nameKey)
     return true
   })
 }
@@ -441,8 +445,8 @@ class RadioAPI {
         const shuffled = defaultStations.sort(() => 0.5 - Math.random())
         const result = {
           success: true,
-          data: shuffled.slice(0, limit),
-          source: 'radio-browser'
+          data: officialFirst(shuffled, limit),
+          source: 'radio-browser+official'
         }
         if (!options.bypassCache) {
           this.setCache(this.cache.topStations, cacheKey, result)
@@ -484,7 +488,11 @@ class RadioAPI {
       // “最新”常被批量入库的 0 投票/0 点击台淹没（实测 30 个里 23 个不通）：
       // 有投票或点击的先留，不够数再回落到原列表，不让栏目变空
       const withSignal = stations.filter((s) => s.votes > 0 || s.clickcount > 0 || s.clicktrend > 0)
-      const usable = (withSignal.length >= limit ? withSignal : stations).slice(0, limit)
+      // 批量入库台常带点击量但多半没台标：有信号且有台标的先留，不够再逐层回落，栏目不为空
+      const withSignalAndLogo = withSignal.filter((s) => s.favicon)
+      const usable = (
+        withSignalAndLogo.length >= limit ? withSignalAndLogo : withSignal.length >= limit ? withSignal : stations
+      ).slice(0, limit)
       if (this.debugEnabled) console.log(`Got ${usable.length} latest stations`)
       if (!options.bypassCache) {
         this.setCache(this.cache.latestStations, cacheKey, usable)

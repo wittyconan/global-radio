@@ -5,6 +5,7 @@ import { useHistoryStore } from './history'
 import { mediaSessionManager } from '@/utils/mediaSession'
 import { deviceOptimization } from '@/utils/deviceOptimization'
 // MediaControl插件已移除
+import Hls from 'hls.js'
 import { Capacitor } from '@capacitor/core'
 import { MediaSession } from '@jofr/capacitor-media-session'
 
@@ -34,6 +35,36 @@ export const usePlayerStore = defineStore('player', () => {
     isLoading: isLoading.value,
     error: error.value
   }))
+
+  const hls = ref<Hls | null>(null)
+
+  const destroyHls = () => {
+    if (hls.value) {
+      hls.value.destroy()
+      hls.value = null
+    }
+  }
+
+  // m3u8 直播流：Chrome 桌面原生播不了，用 hls.js 走 MSE；Safari 原生支持 HLS，走原生
+  const isHlsUrl = (url: string) => url.split('?')[0].toLowerCase().endsWith('.m3u8')
+  const attachSource = async (url: string): Promise<void> => {
+    destroyHls()
+    if (isHlsUrl(url) && Hls.isSupported()) {
+      await new Promise<void>((resolve, reject) => {
+        const instance = new Hls({ maxBufferLength: 30 })
+        hls.value = instance
+        instance.loadSource(url)
+        instance.attachMedia(audio.value!)
+        instance.on(Hls.Events.MANIFEST_PARSED, () => resolve())
+        instance.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) reject(new Error(`hls: ${data.type}/${data.details}`))
+        })
+      })
+    } else {
+      audio.value!.src = url
+      audio.value!.load()
+    }
+  }
 
   const isFavorite = computed(() => {
     if (!currentStation.value) return false
@@ -189,12 +220,11 @@ export const usePlayerStore = defineStore('player', () => {
       
       // 原生播放器代码已移除，直接使用Web播放器
       
-      // 设置音频源
-      audio.value!.src = station.url_resolved || station.url
+      // 设置音频源（m3u8 走 hls.js，其余走原生）
+      await attachSource(station.url_resolved || station.url)
       audio.value!.volume = isDucked.value ? volume.value * 0.3 : volume.value
       audio.value!.muted = isMuted.value
-      
-      audio.value!.load()
+
       await audio.value!.play()
       
       console.log(`成功播放电台: ${station.name}`)
@@ -240,6 +270,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   // 停止播放
   const stopStation = async () => {
+    destroyHls()
     if (audio.value) {
       audio.value.pause()
       audio.value.currentTime = 0
