@@ -646,6 +646,10 @@ class RadioAPI {
 
   // Get station by UUID
   async getStationByUUID(uuid: string): Promise<RadioStation | null> {
+    // 官方台的 uuid 是本地编的 official-NN，Radio Browser 查不到，先从官方表里找；
+    // 之前没这一步，点官方台卡片会进“未找到该电台”
+    const official = OFFICIAL_STATIONS.find((s) => s.stationuuid === uuid)
+    if (official) return isBlockedStation(official) ? null : official
     return this.retryWithFallback(async () => {
       const response = await this.currentAPI.get<RadioStation[]>(`/json/stations/byuuid/${uuid}`)
       const station = response.data.length > 0 ? response.data[0] : null
