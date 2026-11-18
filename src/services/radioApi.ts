@@ -485,13 +485,17 @@ class RadioAPI {
         limit: limit * 4,
         hidebroken: true
       })
+      // “最新”栏被批量入库的古兰经/圣训朗诵台淹没（带 quran/hadith 标签、有点击量也有台标，投票过滤拦不住）：
+      // 先整批排除这类标签，不够数再回落，搜索页搜古兰经不受影响
+      const notSpam = stations.filter((s) => !/quran|hadith/i.test(s.tags || ''))
+      const pool = notSpam.length >= limit ? notSpam : stations
       // “最新”常被批量入库的 0 投票/0 点击台淹没（实测 30 个里 23 个不通）：
       // 有投票或点击的先留，不够数再回落到原列表，不让栏目变空
-      const withSignal = stations.filter((s) => s.votes > 0 || s.clickcount > 0 || s.clicktrend > 0)
+      const withSignal = pool.filter((s) => s.votes > 0 || s.clickcount > 0 || s.clicktrend > 0)
       // 批量入库台常带点击量但多半没台标：有信号且有台标的先留，不够再逐层回落，栏目不为空
       const withSignalAndLogo = withSignal.filter((s) => s.favicon)
       const usable = (
-        withSignalAndLogo.length >= limit ? withSignalAndLogo : withSignal.length >= limit ? withSignal : stations
+        withSignalAndLogo.length >= limit ? withSignalAndLogo : withSignal.length >= limit ? withSignal : pool
       ).slice(0, limit)
       if (this.debugEnabled) console.log(`Got ${usable.length} latest stations`)
       if (!options.bypassCache) {

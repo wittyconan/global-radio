@@ -50,20 +50,34 @@ export const usePlayerStore = defineStore('player', () => {
   const attachSource = async (url: string): Promise<void> => {
     destroyHls()
     if (isHlsUrl(url) && Hls.isSupported()) {
-      await new Promise<void>((resolve, reject) => {
-        const instance = new Hls({ maxBufferLength: 30 })
-        hls.value = instance
-        instance.loadSource(url)
-        instance.attachMedia(audio.value!)
-        instance.on(Hls.Events.MANIFEST_PARSED, () => resolve())
-        instance.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) reject(new Error(`hls: ${data.type}/${data.details}`))
+      // 注意：部分央媒 m3u8（如 CNR ngcdn）只放行自家域名的跨域请求，hls.js 在 Chrome 里会被 CORS 拦住；
+      // 10 秒等不到清单就改走原生播放（Safari 原生支持 HLS 能播，Chrome 播不了会走重试并报播放失败，不再静默卡死）
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const instance = new Hls({ maxBufferLength: 30 })
+          hls.value = instance
+          const timer = setTimeout(() => reject(new Error('hls: manifest timeout')), 10000)
+          instance.loadSource(url)
+          instance.attachMedia(audio.value!)
+          instance.on(Hls.Events.MANIFEST_PARSED, () => {
+            clearTimeout(timer)
+            resolve()
+          })
+          instance.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) {
+              clearTimeout(timer)
+              reject(new Error(`hls: ${data.type}/${data.details}`))
+            }
+          })
         })
-      })
-    } else {
-      audio.value!.src = url
-      audio.value!.load()
+        return
+      } catch (e) {
+        console.warn('hls 播放失败，改走原生播放:', e)
+        destroyHls()
+      }
     }
+    audio.value!.src = url
+    audio.value!.load()
   }
 
   const isFavorite = computed(() => {
