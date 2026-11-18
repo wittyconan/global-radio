@@ -17,6 +17,18 @@ type CacheOptions = {
 
 // 官方精选台：2026-11-18 实测 35 个 https 直播流（内地 CNR/CRI、香港 RTHK、澳门 TDM、台湾中广/飞碟/ICRT 等）。
 // 只做补充，不替代 Radio Browser；上站前已用 Range 探测验过 200/206，http 台不在此表。
+// 已确认播不了的源（2026-11-18 实测）：CNR 全系 m3u8 只放行央视自家域名（ngcdn001->app.cctv.com、ngcdn002->vod.cctv.cn），
+// Chrome 里 hls.js 会被 CORS 拦住；satellitepull.cnr.cn 的地址带过期 wsSession 签名；警广台北台的 m3u8 干脆不发 CORS 头。
+// 这些地址从官方表里删了还不够——Radio Browser 还会把它们抓回来，所以这里再拦一道：搜索、首页、最新、详情页统一过滤，
+// 以后更新、换台、加台都不会再把它们带回来。只拦流地址，不拦台名：CNR-1 那条蜻蜓 mp3（lhttp.qtfm.cn）能原生播，不在拦的范围。
+const BLOCKED_STREAM_PATTERNS = [
+  /ngcdn\d*\.cnr\.cn/i,
+  /satellitepull\.cnr\.cn/i,
+  /stream\.pbs\.gov\.tw\/live\/TPS/i
+]
+const isBlockedStation = (s: RadioStation) =>
+  BLOCKED_STREAM_PATTERNS.some((re) => re.test(s.url_resolved || s.url || ''))
+
 const OFFICIAL_STATIONS = officialStationsJson as RadioStation[]
 const isHttpsStation = (s: RadioStation) => (s.url_resolved || s.url || '').startsWith('https://')
 const dedupeStations = (stations: RadioStation[]): RadioStation[] => {
@@ -291,7 +303,7 @@ class RadioAPI {
       const data = dedupeStations([
         ...matchingOfficialStations(searchParams),
         ...((response.data || []) as RadioStation[])
-      ])
+      ]).filter((s) => !isBlockedStation(s))
       this.setCache(this.cache.stationSearch, cacheKey, data)
       return data
     })
@@ -636,7 +648,8 @@ class RadioAPI {
   async getStationByUUID(uuid: string): Promise<RadioStation | null> {
     return this.retryWithFallback(async () => {
       const response = await this.currentAPI.get<RadioStation[]>(`/json/stations/byuuid/${uuid}`)
-      return response.data.length > 0 ? response.data[0] : null
+      const station = response.data.length > 0 ? response.data[0] : null
+      return station && !isBlockedStation(station) ? station : null
     })
   }
 
